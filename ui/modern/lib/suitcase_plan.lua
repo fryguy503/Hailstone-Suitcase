@@ -70,21 +70,27 @@ local function record(snapshot)
   return source
 end
 
-function P.resolve(rows, target)
-  local exact, same = {}, {}
+function P.resolve(rows, target, wornSlot)
+  local exact, same, previouslyWorn = {}, {}, {}
   local savedSerial = serial(target)
   local persistentSerial = savedSerial and savedSerial:match("%D")
-  local incompatibleExact = false
+  local incompatibleExact, equivalentWorn = false, nil
   for _, row in ipairs(rows) do
     local item = row.item
     if item.id == target.id then
+      local currentSerial = serial(item)
       local configurationMatches = target.configuration == nil or target.configuration == item.configuration
-      if savedSerial and savedSerial == serial(item) then
+      if savedSerial and savedSerial == currentSerial then
         if persistentSerial or configurationMatches then exact[#exact + 1] = row
         else incompatibleExact = true end
       end
       if configurationMatches and (target.attuned == nil or target.attuned == item.attuned) then
         same[#same + 1] = row
+      end
+      if target.configuration and target.configuration ~= "" and configurationMatches
+          and target.attuned ~= nil and target.attuned == item.attuned and not row.stale then
+        if currentSerial and currentSerial == target.worn_serial then previouslyWorn[#previouslyWorn + 1] = row end
+        if row.where == "worn" and row.slot == wornSlot then equivalentWorn = row end
       end
     end
   end
@@ -92,7 +98,35 @@ function P.resolve(rows, target)
   -- be reassigned between sessions, so require the saved configuration when available and refuse a conflicting match.
   local candidates = (#exact > 0 or persistentSerial or incompatibleExact) and exact or same
   if #candidates == 1 then return candidates[1] end
-  return nil, #candidates > 1 and "ambiguous" or "missing"
+  if #candidates > 1 then return nil, "ambiguous" end
+  if incompatibleExact then return nil, "missing" end
+  if #previouslyWorn == 1 then return previouslyWorn[1] end
+  if #previouslyWorn > 1 then return nil, "ambiguous" end
+  -- An equivalent item already in the intended worn slot can stay there when the saved UID no longer resolves.
+  if equivalentWorn then return equivalentWorn, "equivalent_worn" end
+  return nil, "missing"
+end
+
+function P.rememberWorn(rows, targets, outgoing)
+  local updated
+  for slot in pairs(outgoing) do
+    local target = targets[slot]
+    if type(target) == "table" then
+      local row, match = P.resolve(rows, target, slot)
+      local currentSerial = row and serial(row.item)
+      if match == "equivalent_worn" and currentSerial and currentSerial:match("%D") then
+        if not updated then
+          updated = {}
+          for key, value in pairs(targets) do updated[key] = value end
+        end
+        local saved = P.capture(target)
+        -- Keep the original UID first in case it becomes available. Only remember a verified copy we are wearing.
+        saved.worn_serial = currentSerial
+        updated[slot] = saved
+      end
+    end
+  end
+  return updated
 end
 
 local function twoHanded(item)
@@ -288,7 +322,7 @@ function P.plan(snapshot, targets)
       detail.status = current and "available" or "empty"
       if current then result.changes = result.changes + 1 end
     elseif type(target) == "table" then
-      local row, unresolved = P.resolve(source.rows, target)
+      local row, unresolved = P.resolve(source.rows, target, slot)
       if not row then
         result.changes = result.changes + 1
         local reason = unresolved == "ambiguous" and " has more than one matching copy." or " is missing from worn gear and bags."

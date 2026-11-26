@@ -116,6 +116,82 @@ do
 end
 
 do
+  local signature = "30:0:0:0:0:0"
+  local saved = item(20, "OldHelmIdentity", {2}, {configuration = signature})
+  local equipped = item(20, "NewHelmIdentity", {2}, {configuration = signature})
+  local target = P.capture(saved)
+  local current = row(2, equipped)
+  local plan = P.plan(snapshot({current}), {[2] = target})
+  assert(not plan.blocked and plan.changes == 0 and #plan.steps == 0)
+  assert(plan.slots[2].status == "equipped" and plan.slots[2].source == current)
+  assert(P.resolve({current}, target, 2) == current)
+  assert(not P.resolve({current}, target, 3), "a similar item in a different worn slot cannot substitute")
+
+  local carried = row(23, equipped)
+  assert(not P.resolve({carried}, target, 2), "a similar carried item cannot substitute for the saved instance")
+  local exact = row(23, saved)
+  assert(P.resolve({current, exact}, target, 2) == exact, "an available exact copy takes precedence")
+  assert(not P.rememberWorn({current, exact}, {[2] = target}, {[2] = true}))
+  local duplicate, why = P.resolve({current, exact, row(24, saved)}, target, 2)
+  assert(not duplicate and why == "ambiguous")
+
+  local mismatched = item(20, "NewHelmIdentity", {2}, {configuration = "31:0:0:0:0:0"})
+  local attuned = item(20, "NewHelmIdentity", {2}, {configuration = signature, attuned = true})
+  local unknown = item(20, "NewHelmIdentity", {2})
+  for _, other in ipairs({mismatched, attuned, unknown}) do
+    assert(P.plan(snapshot({row(2, other)}), {[2] = target}).blocked)
+  end
+
+  local spentStack = item(8567, "OldArrows", {22}, {type = 27, stackable = true, configuration = "0:0:0:0:0:0"})
+  local replacement = item(8567, "NewArrows", {22},
+    {type = 27, stackable = true, count = 40, configuration = spentStack.configuration})
+  local ammunition = P.plan(snapshot({row(22, replacement)}), {[22] = P.capture(spentStack)})
+  assert(not ammunition.blocked and ammunition.slots[22].status == "equipped" and #ammunition.steps == 0)
+end
+
+do
+  local configuration = {configuration = "0:0:0:0:0:0"}
+  local savedHelm = item(21, "OldCommonHelm", {2}, configuration)
+  local helm = item(21, "CurrentCommonHelm", {2}, configuration)
+  local savedChest = item(22, "OldCommonChest", {17}, configuration)
+  local chest = item(22, "CurrentCommonChest", {17}, configuration)
+  local savedShoulders = item(23, "OldBaselineShoulders", {6}, configuration)
+  local shoulders = item(23, "BaselineShoulders", {6}, configuration)
+  local savedRing = item(24, "OldBaselineRing", {15}, configuration)
+  local ring = item(24, "BaselineRing", {15}, configuration)
+  local clickShoulders = item(25, "ClickyShoulders", {6}, configuration)
+  local clickRing = item(26, "ClickyRing", {15}, configuration)
+  local bag = {bagSlots = 2, bagType = 0, bagSize = 3}
+  local baseline = {[2] = P.capture(savedHelm), [6] = P.capture(savedShoulders),
+    [15] = P.capture(savedRing), [17] = P.capture(savedChest)}
+  local clickies = {[2] = baseline[2], [6] = P.capture(clickShoulders),
+    [15] = P.capture(clickRing), [17] = baseline[17]}
+  local snap = snapshot({row(2, helm), row(6, shoulders), row(15, ring), row(17, chest),
+    row(23, bag), row(23, clickShoulders, 0), row(23, clickRing, 1)})
+  local toClickies = P.plan(snap, clickies)
+  assert(not toClickies.blocked and toClickies.changes == 2 and #toClickies.steps == 6)
+  local remembered = P.rememberWorn(snap.rows, baseline, {[6] = true, [15] = true})
+  assert(remembered[6].serial == savedShoulders.serial and remembered[6].worn_serial == shoulders.serial)
+  assert(remembered[15].serial == savedRing.serial and remembered[15].worn_serial == ring.serial)
+  assert(not baseline[6].worn_serial and not remembered[2].worn_serial)
+  local active, cursor = apply(toClickies, snap)
+  assert(active["i:2"] == helm and active["i:17"] == chest and not cursor)
+  assert(active["i:6"] == clickShoulders and active["i:15"] == clickRing)
+  local clickSnap = snapshot({row(2, helm), row(6, clickShoulders), row(15, clickRing), row(17, chest),
+    row(23, bag), row(23, active["i:23:0"], 0), row(23, active["i:23:1"], 1)})
+  assert(P.plan(clickSnap, baseline).blocked, "an unverified carried copy must not substitute")
+  local toBaseline = P.plan(clickSnap, remembered)
+  assert(not toBaseline.blocked and toBaseline.changes == 2 and #toBaseline.steps == 6)
+  local restored, finalCursor = apply(toBaseline, clickSnap)
+  assert(restored["i:2"] == helm and restored["i:17"] == chest and not finalCursor)
+  assert(restored["i:6"] == shoulders and restored["i:15"] == ring)
+  local baggedRing, originalRing = row(23, ring, 1), row(24, savedRing)
+  assert(P.resolve({baggedRing, originalRing}, remembered[15], 15) == originalRing)
+  local changedRing = item(24, ring.serial, {15}, {configuration = "80:0:0:0:0:0"})
+  assert(not P.resolve({row(23, changedRing)}, remembered[15], 15))
+end
+
+do
   local sword = item(6, "Sword", {13}, {type = 0})
   local shield = item(7, "Shield", {14}, {type = 8})
   local greatsword = item(8, "GreatSword", {13}, {type = 1})

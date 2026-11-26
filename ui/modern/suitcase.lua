@@ -63,13 +63,28 @@ local function selectSet(set)
   notice(nil)
 end
 
+local function recordOutgoingGear(current, plan)
+  local outgoing, nextProfile = {}, nil
+  for _, step in ipairs(plan.steps) do
+    if NAMES[step.slot] and step.before then outgoing[step.slot] = true end
+  end
+  for index, saved in ipairs(profile.sets) do
+    local targets = Plan.rememberWorn(current.rows, saved.targets, outgoing)
+    if targets then
+      nextProfile = nextProfile or Sets.copy(profile)
+      nextProfile.sets[index] = {id = saved.id, name = saved.name, targets = targets}
+    end
+  end
+  return not nextProfile or persist(nextProfile)
+end
+
 local function equip(set, byCommand)
   if runtime.status().running then
     if byCommand then owner.report_result("A swap is already in progress.") end
     return
   end
   selectSet(set)
-  local current = runtime.snapshot()
+  local current = runtime.snapshot(true)
   local plan = current and Plan.plan(current, set.targets)
   local why
   if not plan then why = "Inventory is unavailable."
@@ -79,6 +94,10 @@ local function equip(set, byCommand)
     local ok
     ok, why = runtime.start(plan, set.name)
     if ok then
+      if not recordOutgoingGear(current, plan) then
+        runtime.cancel("Could not save the identities of the gear being removed.")
+        return
+      end
       notice("Equipping " .. set.name .. "…")
       nextPoll = 0
       return
@@ -222,7 +241,7 @@ local function itemHelp(row, label)
       -- Re-resolve against the current inventory so a moved item never inspects the contents of its old slot.
       local current = runtime.snapshot(true)
       if not current then return notice("Inventory is unavailable.", true) end
-      local source = Plan.resolve(current.rows, target)
+      local source = Plan.resolve(current.rows, target, row.slot)
       local ok, openedItem
       if source then
         ok, openedItem = pcall(API.inventory.ClickSlot, source.slot, source.sub, "rightheld")
