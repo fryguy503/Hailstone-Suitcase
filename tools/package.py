@@ -22,7 +22,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", type=Path, default=root.parent / "hailstone-client")
     parser.add_argument("--out", type=Path, default=root / "dist")
-    parser.add_argument("--version", default="0.1.1")
+    parser.add_argument("--version", default="0.1.2")
     args = parser.parse_args()
     packager = args.client / "tools" / "make_addon.py"
     if not packager.is_file():

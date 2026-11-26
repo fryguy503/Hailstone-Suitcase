@@ -1,5 +1,6 @@
 local API = hs.UI
-local T = dofile("lib/theme.lua")
+local hud = dofile("lib/hud.lua")
+local T = hud.T
 local Plan = dofile("lib/suitcase_plan.lua")
 local Sets = dofile("lib/suitcase_sets.lua")
 local Runtime = dofile("lib/suitcase_runtime.lua")
@@ -178,15 +179,16 @@ local function problem(row)
   return row and (row.status == "missing" or row.status == "ambiguous" or row.status == "blocked")
 end
 
-local function gearIcon(x, y, size, row)
+local function gearIcon(x, y, size, row, s)
   local saved = row and row.target
   local item = type(saved) == "table" and saved or nil
   local red = problem(row)
   local tex, u0, v0, u1, v1
   if item and item.icon and item.icon > 0 then tex, u0, v0, u1, v1 = API.assets.ItemIcon(item.icon) end
-  T.Icon(x, y, size, 1, not red and tex or nil, u0, v0, u1, v1, red and C.danger or nil, {radius = 4})
+  T.Icon(x, y, size, s, not red and tex or nil, u0, v0, u1, v1, red and C.danger or nil, {radius = 4})
   if red and tex then
-    ui.DrawImage(tex, x + 1.5, y + 1.5, x + size - 1.5, y + size - 1.5, u0, v0, u1, v1, 1, 0.38, 0.42, 1)
+    local inset = 1.5 * s
+    ui.DrawImage(tex, x + inset, y + inset, x + size - inset, y + size - inset, u0, v0, u1, v1, 1, 0.38, 0.42, 1)
   end
 end
 
@@ -216,7 +218,7 @@ local function itemHelp(row, label)
   local target = row and row.target
   if type(target) == "table" then
     if ui.IsItemClicked(ui.Mouse.Right) then
-      T.TakeRightClick()
+      if ui.GetIO().alt then T.TakeAltRightClick() else T.TakeRightClick() end
       -- Re-resolve against the current inventory so a moved item never inspects the contents of its old slot.
       local current = runtime.snapshot(true)
       if not current then return notice("Inventory is unavailable.", true) end
@@ -235,32 +237,33 @@ local function itemHelp(row, label)
   if not ui.IsMouseDown(ui.Mouse.Right) then ui.SetTooltip(label) end
 end
 
-local function tile(slot, row, x, y, width, height, weapon, font)
+local function tile(slot, row, x, y, width, height, weapon, font, s)
   local red, active = problem(row), inspected == slot
-  paint(x, y, width, height, red and C.danger or C.inset, red and 0.20 or 0.78, 5)
-  edge(x, y, width, height, red and C.danger or active and C.accent or C.ink, (red or active) and 0.9 or 0.14, 5)
-  local size = weapon and 26 or 27
-  gearIcon(weapon and x + (width - size) / 2 or x + 4, y + 3, size, row)
+  paint(x, y, width, height, red and C.danger or C.inset, red and 0.20 or 0.78, 5 * s)
+  edge(x, y, width, height, red and C.danger or active and C.accent or C.ink, (red or active) and 0.9 or 0.14, 5 * s)
+  local size = (weapon and 26 or 27) * s
+  gearIcon(weapon and x + (width - size) / 2 or x + 4 * s, y + 3 * s, size, row, s)
   if weapon then
-    text(x + 2, y + size + 5, NAMES[slot], width - 4, red and C.danger or C.text, font, "center")
+    text(x + 2 * s, y + size + 5 * s, NAMES[slot], width - 4 * s, red and C.danger or C.text, font, "center")
   else
-    text(x + size + 9, y + (red and 2 or 9), NAMES[slot], width - size - 14, C.text, font)
+    local tx, tw = x + size + 9 * s, width - size - 14 * s
+    text(tx, y + (red and 2 or 9) * s, NAMES[slot], tw, C.text, font)
     if red then
-      text(x + size + 9, y + 15, row.status == "missing" and "Missing" or "Blocked", width - size - 14, C.danger, T.font.tiny)
+      text(tx, y + 15 * s, row.status == "missing" and "Missing" or "Blocked", tw, C.danger, T.font.tiny)
     end
   end
   if T.Hit("##suitcase-slot" .. slot, x, y, x + width, y + height) then inspected = slot end
-  T.HoverFx(x, y, x + width, y + height, 1, 5)
+  T.HoverFx(x, y, x + width, y + height, s, 5)
   itemHelp(row, NAMES[slot] .. "\n" .. itemName(row) .. "\n" .. location(row))
 end
 
-local function mannequin(x, y, w)
+local function mannequin(x, y, w, s)
   local cx = x + w / 2
   local col, alpha = C.muted, 0.43
   local function line(x1, y1, x2, y2)
-    ui.DrawLine(cx + x1, y + y1, cx + x2, y + y2, col[1], col[2], col[3], alpha, 2)
+    ui.DrawLine(cx + x1 * s, y + y1 * s, cx + x2 * s, y + y2 * s, col[1], col[2], col[3], alpha, 2 * s)
   end
-  ui.DrawCircle(cx, y + 16, 10, col[1], col[2], col[3], alpha, 2)
+  ui.DrawCircle(cx, y + 16 * s, 10 * s, col[1], col[2], col[3], alpha, 2 * s)
   line(0, 26, 0, 32)
   line(-17, 38, 0, 32); line(0, 32, 17, 38)
   line(-17, 38, -28, 66); line(17, 38, 28, 66)
@@ -270,82 +273,88 @@ local function mannequin(x, y, w)
   line(0, 84, -8, 109); line(0, 84, 8, 109)
 end
 
-local function inventory(plan, width)
+local function inventory(plan, width, s)
   local x, y = ui.GetCursorScreenPos()
   local rows = plan and plan.slots or {}
   local col = math.floor(width * .30)
-  local font, step = T.font.small, 36
-  for index, slot in ipairs(ARMOR) do tile(slot, rows[slot], x, y + (index - 1) * step, col, step - 3, false, font) end
-  for index, slot in ipairs(ACCESSORIES) do
-    tile(slot, rows[slot], x + width - col, y + (index - 1) * step, col, step - 3, false, font)
+  local font, step = T.font.small, 36 * s
+  for index, slot in ipairs(ARMOR) do
+    tile(slot, rows[slot], x, y + (index - 1) * step, col, step - 3 * s, false, font, s)
   end
-  local inset, center = x + col + 8, width - col * 2 - 16
-  mannequin(inset, y + 67, center)
+  for index, slot in ipairs(ACCESSORIES) do
+    tile(slot, rows[slot], x + width - col, y + (index - 1) * step, col, step - 3 * s, false, font, s)
+  end
+  local inset, center = x + col + 8 * s, width - col * 2 - 16 * s
+  mannequin(inset, y + 67 * s, center, s)
   local row = rows[inspected]
-  text(inset, y + 196, NAMES[inspected], center, C.muted, T.font.small, "center")
-  text(inset, y + 216, itemName(row), center, problem(row) and C.danger or C.text, T.font.normal, "center")
-  text(inset, y + 237, location(row), center, problem(row) and C.danger or C.muted, T.font.small, "center")
-  local wy, ww = y + #ARMOR * step + 3, (width - (#WEAPONS - 1) * 4) / #WEAPONS
-  for index, slot in ipairs(WEAPONS) do tile(slot, rows[slot], x + (index - 1) * (ww + 4), wy, ww, 46, true, T.font.tiny) end
-  blank(x, y, width, #ARMOR * step + 51)
+  text(inset, y + 196 * s, NAMES[inspected], center, C.muted, T.font.small, "center")
+  text(inset, y + 216 * s, itemName(row), center, problem(row) and C.danger or C.text, T.font.normal, "center")
+  text(inset, y + 237 * s, location(row), center, problem(row) and C.danger or C.muted, T.font.small, "center")
+  local gap = 4 * s
+  local wy, ww = y + #ARMOR * step + 3 * s, (width - (#WEAPONS - 1) * gap) / #WEAPONS
+  for index, slot in ipairs(WEAPONS) do
+    tile(slot, rows[slot], x + (index - 1) * (ww + gap), wy, ww, 46 * s, true, T.font.tiny, s)
+  end
+  blank(x, y, width, #ARMOR * step + 51 * s)
 end
 
-local function listView(plan, width)
+local function listView(plan, width, s)
   local x, y = ui.GetCursorScreenPos()
-  local slotWidth, locWidth = 82, math.max(83, width * .24)
-  text(x + 5, y + 3, "Slot", slotWidth - 8, C.muted, T.font.small)
-  text(x + slotWidth, y + 3, "Saved item", width - slotWidth - locWidth, C.muted, T.font.small)
-  text(x + width - locWidth, y + 3, "Location", locWidth - 4, C.muted, T.font.small)
-  local ry = y + 24
+  local slotWidth, locWidth = 82 * s, math.max(83 * s, width * .24)
+  text(x + 5 * s, y + 3 * s, "Slot", slotWidth - 8 * s, C.muted, T.font.small)
+  text(x + slotWidth, y + 3 * s, "Saved item", width - slotWidth - locWidth, C.muted, T.font.small)
+  text(x + width - locWidth, y + 3 * s, "Location", locWidth - 4 * s, C.muted, T.font.small)
+  local ry, step = y + 24 * s, 30 * s
   for slot = 0, 22 do
     local row = plan and plan.slots[slot]
     if row and row.target ~= nil and (row.target ~= false or row.current) then
-      if problem(row) then paint(x, ry, width, 30, C.danger, .13, 4) end
+      if problem(row) then paint(x, ry, width, step, C.danger, .13, 4 * s) end
       ui.DrawLine(x, ry, x + width, ry, C.ink[1], C.ink[2], C.ink[3], .14, 1)
       local color = problem(row) and C.danger or C.text
-      text(x + 5, ry + 8, NAMES[slot], slotWidth - 8, C.muted, T.font.small)
-      gearIcon(x + slotWidth, ry + 3, 24, row)
-      text(x + slotWidth + 30, ry + 8, itemName(row), width - slotWidth - locWidth - 34, color, T.font.small)
-      text(x + width - locWidth, ry + 8, location(row), locWidth - 4, problem(row) and C.danger or C.muted, T.font.small)
-      if T.Hit("##suitcase-row" .. slot, x, ry, x + width, ry + 30) then inspected = slot end
+      local ty = ry + 8 * s
+      text(x + 5 * s, ty, NAMES[slot], slotWidth - 8 * s, C.muted, T.font.small)
+      gearIcon(x + slotWidth, ry + 3 * s, 24 * s, row, s)
+      text(x + slotWidth + 30 * s, ty, itemName(row), width - slotWidth - locWidth - 34 * s, color, T.font.small)
+      text(x + width - locWidth, ty, location(row), locWidth - 4 * s, problem(row) and C.danger or C.muted, T.font.small)
+      if T.Hit("##suitcase-row" .. slot, x, ry, x + width, ry + step) then inspected = slot end
       itemHelp(row, itemName(row) .. "\n" .. location(row))
-      ry = ry + 30
+      ry = ry + step
     end
   end
   blank(x, y, width, ry - y)
 end
 
-local function sidebar(width, height, running)
+local function sidebar(width, height, running, s)
   ui.BeginChild("##suitcase-sets", width, height, false)
   local x, y = ui.GetCursorScreenPos()
   local inside = ui.GetContentRegionAvail()
   local ry = y
-  if #profile.sets == 0 then text(x + 6, ry + 5, "No saved sets", inside - 10, C.muted, T.font.small) end
+  if #profile.sets == 0 then text(x + 6 * s, ry + 5 * s, "No saved sets", inside - 10 * s, C.muted, T.font.small) end
   for _, set in ipairs(profile.sets) do
     local selected = set.id == profile.selected
     local data = preview(set)
     local label = not data and "Inventory unavailable" or data.blocked and "Blocked" or
       data.changes == 0 and "Equipped" or ("%d change%s"):format(data.changes, data.changes == 1 and "" or "s")
-    paint(x, ry, inside - 2, 43, selected and C.accent or C.inset, selected and .20 or .65, 5)
-    if selected then edge(x, ry, inside - 2, 43, C.accent, .65, 5) end
-    text(x + 7, ry + 5, set.name, inside - 14, C.text, T.font.normal)
-    text(x + 7, ry + 24, label, inside - 14, data and data.blocked and C.danger or C.muted, T.font.tiny)
-    if T.Hit("##suitcase-set" .. set.id, x, ry, x + inside - 2, ry + 43) and not running then selectSet(set) end
+    paint(x, ry, inside - 2 * s, 43 * s, selected and C.accent or C.inset, selected and .20 or .65, 5 * s)
+    if selected then edge(x, ry, inside - 2 * s, 43 * s, C.accent, .65, 5 * s) end
+    text(x + 7 * s, ry + 5 * s, set.name, inside - 14 * s, C.text, T.font.normal)
+    text(x + 7 * s, ry + 24 * s, label, inside - 14 * s, data and data.blocked and C.danger or C.muted, T.font.tiny)
+    if T.Hit("##suitcase-set" .. set.id, x, ry, x + inside - 2 * s, ry + 43 * s) and not running then selectSet(set) end
     if ui.IsItemHovered() then ui.SetTooltip(set.name .. "\n" .. label) end
-    ry = ry + 47
+    ry = ry + 47 * s
   end
-  blank(x, y, inside - 2, math.max(25, ry - y))
+  blank(x, y, inside - 2 * s, math.max(25 * s, ry - y))
   ui.EndChild()
 end
 
-local function drawForm(selected, running)
+local function drawForm(selected, running, s)
   if not form then return end
   if form == "delete" then
     ui.Text("Delete " .. selected.name .. "?")
     ui.SameLine()
     if ui.Button("Delete Set") then runForm() end
   else
-    ui.SetNextItemWidth(210)
+    ui.SetNextItemWidth(210 * s)
     name = ui.InputTextWithHint("##suitcase-name", "Set name", name, 80)
     ui.SameLine()
     ui.BeginDisabled(running or not snapshot)
@@ -356,31 +365,31 @@ local function drawForm(selected, running)
   if ui.Button("Cancel##suitcase-form") then form = nil; notice(nil) end
 end
 
-local function drawDetails(selected, height, status)
+local function drawDetails(selected, height, status, s)
   local plan = selected and preview(selected)
   local width = ui.GetContentRegionAvail()
   local x, y = ui.GetCursorScreenPos()
-  text(x, y + 1, selected and selected.name or "Equipment Sets", width - 150, C.text, T.font.large)
+  if selected then text(x, y + s, selected.name, width - 150 * s, C.text, T.font.large) end
   local summary = plan and ("%d slot%s to change"):format(plan.changes, plan.changes == 1 and "" or "s") or ""
-  text(x, y + 25, summary, width - 150, C.muted, T.font.small)
+  text(x, y + 25 * s, summary, width - 150 * s, C.muted, T.font.small)
   for index, layout in ipairs({"inventory", "list"}) do
-    local bx = x + width - 136 + (index - 1) * 76
-    if T.Button("##suitcase-" .. layout, bx, y + 3, bx + (index == 1 and 71 or 60), y + 30, 1,
+    local bx = x + width - (136 - (index - 1) * 76) * s
+    if T.Button("##suitcase-" .. layout, bx, y + 3 * s, bx + (index == 1 and 71 or 60) * s, y + 30 * s, s,
         layout == "inventory" and "Inventory" or "List", {primary = profile.layout == layout}) and profile.layout ~= layout then
       local nextProfile = Sets.copy(profile)
       nextProfile.layout = layout
       persist(nextProfile)
     end
   end
-  blank(x, y, width, 39)
+  blank(x, y, width, 39 * s)
   if not selected then
     ui.TextWrapped("Save Equipped to make a set from the gear you’re wearing.")
     return
   end
-  local body = math.max(130, height - (editing and 137 or 109))
+  local body = math.max(130 * s, height - (editing and 137 or 109) * s)
   ui.BeginChild("##suitcase-preview", width, body, false)
   local content = ui.GetContentRegionAvail()
-  if profile.layout == "list" then listView(plan, content) else inventory(plan, content) end
+  if profile.layout == "list" then listView(plan, content, s) else inventory(plan, content, s) end
   ui.EndChild()
   local running = status.running == true
   local detail = message or (plan and plan.blocked and plan.problem)
@@ -390,20 +399,20 @@ local function drawDetails(selected, height, status)
   end
   local sx, sy = ui.GetCursorScreenPos()
   local color = (messageError or (plan and plan.blocked)) and C.danger or C.muted
-  text(sx, sy, detail, width - 2, color, T.font.small)
-  blank(sx, sy, width, 18)
+  text(sx, sy, detail, width - 2 * s, color, T.font.small)
+  blank(sx, sy, width, 18 * s)
   if ui.IsItemHovered() then ui.SetTooltip(detail) end
   local bx, by = ui.GetCursorScreenPos()
-  if T.Button("##suitcase-edit", bx, by, bx + 83, by + 26, 1, editing and "Done Editing" or "Edit Set",
+  if T.Button("##suitcase-edit", bx, by, bx + 83 * s, by + 26 * s, s, editing and "Done Editing" or "Edit Set",
       {enabled = not running}) then editing, form = not editing, nil end
-  local hx = bx + width - 193
-  if T.Button("##suitcase-hotkey", hx, by, hx + 100, by + 26, 1, "Make Hotkey",
+  local hx = bx + width - 193 * s
+  if T.Button("##suitcase-hotkey", hx, by, hx + 100 * s, by + 26 * s, s, "Make Hotkey",
       {enabled = not running, tooltip = "Put the set on your cursor for your normal hotbar"}) then
     local called, ok, why = pcall(Sets.make_hotkey, selected, API)
     if not called then ok, why = false, "Hailstone did not allow hotkey creation." end
     notice(ok and "Click a slot on your hotbar to place it." or why, not ok)
   end
-  if T.Button("##suitcase-equip", bx + width - 87, by, bx + width, by + 26, 1, running and "Stop Swap" or "Equip Set",
+  if T.Button("##suitcase-equip", bx + width - 87 * s, by, bx + width, by + 26 * s, s, running and "Stop Swap" or "Equip Set",
       {primary = true, enabled = running or (plan and not plan.blocked and plan.changes ~= 0) == true}) then
     if running then
       runtime.cancel()
@@ -413,7 +422,7 @@ local function drawDetails(selected, height, status)
       equip(selected, false)
     end
   end
-  blank(bx, by, width, 26)
+  blank(bx, by, width, 26 * s)
   if editing and not running then
     ui.Text(NAMES[inspected])
     ui.SameLine()
@@ -434,6 +443,30 @@ local function drawDetails(selected, height, status)
   end
 end
 
+local DIALOG = {
+  shown = true,
+  keepTitle = true,
+  size = function() return 683, 605 end,
+  resizable = {525, 450},
+  onClose = function() opened = false end,
+}
+
+local function drawWindow(x, y, s, status)
+  local width = ui.GetContentRegionAvail()
+  text(x, y + 2 * s, "Equipment Sets", width - 130 * s, C.text, T.font.large)
+  if T.Button("##suitcase-save", x + width - 116 * s, y, x + width, y + 27 * s, s, "Save Equipped",
+      {enabled = snapshot ~= nil and not status.running}) then form, name = "save", "" end
+  blank(x, y, width, 34 * s)
+  drawForm(Sets.selected(profile), status.running, s)
+  local _, height = ui.GetContentRegionAvail()
+  sidebar(math.floor(math.min(142 * s, width * .24)), height, status.running, s)
+  ui.SameLine(0, 11 * s)
+  ui.BeginChild("##suitcase-details", 0, height, false)
+  drawDetails(Sets.selected(profile), height, status, s)
+  if #profile.sets == 0 and message then ui.TextWrapped(message) end
+  ui.EndChild()
+end
+
 ui.window("Suitcase", function()
   owner = API.plugins.Get("script:suitcase")
   if not owner or not API.session.InGame() then
@@ -451,26 +484,5 @@ ui.window("Suitcase", function()
     nextPoll = 0
   end
   if not opened or not profile then return end
-
-  ui.SetNextWindowSize(683, 605, ui.Cond.FirstUseEver)
-  ui.SetNextWindowSizeConstraints(525, 450, 1250, 950)
-  local visible, keepOpen = ui.Begin("Suitcase###suitcase.sets", true)
-  if visible then
-    local width = ui.GetContentRegionAvail()
-    local x, y = ui.GetCursorScreenPos()
-    text(x, y + 2, "Equipment Sets", width - 130, C.text, T.font.large)
-    if T.Button("##suitcase-save", x + width - 116, y, x + width, y + 27, 1, "Save Equipped",
-        {enabled = snapshot ~= nil and not status.running}) then form, name = "save", "" end
-    blank(x, y, width, 34)
-    drawForm(Sets.selected(profile), status.running)
-    local _, height = ui.GetContentRegionAvail()
-    sidebar(math.floor(math.min(142, width * .24)), height, status.running)
-    ui.SameLine(0, 11)
-    ui.BeginChild("##suitcase-details", 0, height, false)
-    drawDetails(Sets.selected(profile), height, status)
-    if #profile.sets == 0 and message then ui.TextWrapped(message) end
-    ui.EndChild()
-  end
-  ui.End()
-  opened = keepOpen
+  hud.Dialog("SuitcaseWnd", "Suitcase", DIALOG, function(x, y, _, _, s) drawWindow(x, y, s, status) end)
 end)
