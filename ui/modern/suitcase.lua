@@ -211,6 +211,30 @@ local function location(row)
     or "Inventory slot " .. (source.slot - 22)
 end
 
+local function itemHelp(row, label)
+  if not ui.IsItemHovered() then return end
+  local target = row and row.target
+  if type(target) == "table" then
+    if ui.IsItemClicked(ui.Mouse.Right) then
+      T.TakeRightClick()
+      -- Re-resolve against the current inventory so a moved item never inspects the contents of its old slot.
+      local current = runtime.snapshot(true)
+      if not current then return notice("Inventory is unavailable.", true) end
+      local source = Plan.resolve(current.rows, target)
+      local ok, openedItem
+      if source then
+        ok, openedItem = pcall(API.inventory.ClickSlot, source.slot, source.sub, "rightheld")
+      else
+        ok, openedItem = pcall(owner.inspect_saved, target.id, target.configuration)
+      end
+      if not ok or not openedItem then notice("Hailstone could not inspect this item.", true) end
+      return
+    end
+    label = label .. (row.source and "\nRight-click to inspect" or "\nRight-click for saved item stats")
+  end
+  if not ui.IsMouseDown(ui.Mouse.Right) then ui.SetTooltip(label) end
+end
+
 local function tile(slot, row, x, y, width, height, weapon, font)
   local red, active = problem(row), inspected == slot
   paint(x, y, width, height, red and C.danger or C.inset, red and 0.20 or 0.78, 5)
@@ -227,7 +251,7 @@ local function tile(slot, row, x, y, width, height, weapon, font)
   end
   if T.Hit("##suitcase-slot" .. slot, x, y, x + width, y + height) then inspected = slot end
   T.HoverFx(x, y, x + width, y + height, 1, 5)
-  if ui.IsItemHovered() then ui.SetTooltip(NAMES[slot] .. "\n" .. itemName(row) .. "\n" .. location(row)) end
+  itemHelp(row, NAMES[slot] .. "\n" .. itemName(row) .. "\n" .. location(row))
 end
 
 local function mannequin(x, y, w)
@@ -284,7 +308,7 @@ local function listView(plan, width)
       text(x + slotWidth + 30, ry + 8, itemName(row), width - slotWidth - locWidth - 34, color, T.font.small)
       text(x + width - locWidth, ry + 8, location(row), locWidth - 4, problem(row) and C.danger or C.muted, T.font.small)
       if T.Hit("##suitcase-row" .. slot, x, ry, x + width, ry + 30) then inspected = slot end
-      if ui.IsItemHovered() then ui.SetTooltip(itemName(row) .. "\n" .. location(row)) end
+      itemHelp(row, itemName(row) .. "\n" .. location(row))
       ry = ry + 30
     end
   end

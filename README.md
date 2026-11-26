@@ -13,7 +13,9 @@ In Hailstone 0.7.3-beta or newer, open **Add-ons** from the login screen and add
 3. Select a set in the sidebar. **Inventory** shows real item icons on a paper doll. **List** shows names and locations. Red icons identify gear that cannot be resolved. The detail tells you which item is missing or ambiguous.
 4. Click **Equip Set**, or use `/suitcase "Set Name"`, `/equipset "Set Name"`, or `/suit "Set Name"`. Each command without a name opens the window. Names match without regard to case.
 
-Click a slot to inspect it. Under **Edit Set**, **Use Worn** saves the item you’re currently wearing in that slot, **Set Empty** asks Suitcase to remove the item when equipping the set, and **Ignore Slot** leaves whatever you’re wearing alone. Use **Rename** or **Delete** to manage sets.
+Left-click a slot to select it. Right-click saved gear in either layout to see its stats in Hailstone’s regular item window. Worn and carried items show the exact item, including its installed augments. When a saved copy is unavailable, Suitcase requests the saved item’s stats through the server’s normal item-link system.
+
+Under **Edit Set**, **Use Worn** saves the item you’re currently wearing in that slot, **Set Empty** asks Suitcase to remove the item when equipping the set, and **Ignore Slot** leaves whatever you’re wearing alone. Use **Rename** or **Delete** to manage sets.
 
 Click **Make Hotkey** to put a regular Hailstone social on your cursor, then place it in any normal hotbar slot. A set’s hotkey follows it when renamed. Deleting the set makes its old hotkey report that the set is unavailable.
 

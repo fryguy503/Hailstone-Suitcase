@@ -25,6 +25,19 @@ hs.ui_function("player_state", hs.player)
 hs.ui_function("report_result", reply)
 hs.ui_function("window_state", function(name) return mq.TLO.Window(name).Open() end)
 
+hs.ui_function("inspect_saved", function(id, configuration)
+  if type(id) ~= "number" or id % 1 ~= 0 or id < 1 or id > 0xffffffff or not scope() then return false end
+  local augments = {}
+  if type(configuration) == "string" and configuration:match("^%d+:%d+:%d+:%d+:%d+:%d+$") then
+    for value in configuration:gmatch("%d+") do
+      local augment = tonumber(value)
+      augments[#augments + 1] = augment and augment <= 0xffffffff and augment or 0
+    end
+  end
+  hs.inspect_item(id, augments)
+  return true
+end)
+
 hs.ui_function("item_configurations", function(places)
   local configurations = {}
   for index, at in ipairs(places) do

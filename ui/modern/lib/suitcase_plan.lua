@@ -70,7 +70,7 @@ local function record(snapshot)
   return source
 end
 
-local function matchingRow(rows, target)
+function P.resolve(rows, target)
   local exact, same = {}, {}
   local savedSerial = serial(target)
   local persistentSerial = savedSerial and savedSerial:match("%D")
@@ -288,7 +288,7 @@ function P.plan(snapshot, targets)
       detail.status = current and "available" or "empty"
       if current then result.changes = result.changes + 1 end
     elseif type(target) == "table" then
-      local row, unresolved = matchingRow(source.rows, target)
+      local row, unresolved = P.resolve(source.rows, target)
       if not row then
         result.changes = result.changes + 1
         local reason = unresolved == "ambiguous" and " has more than one matching copy." or " is missing from worn gear and bags."

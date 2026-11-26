@@ -61,6 +61,11 @@ do
   assert(leaveAlone.blocked and leaveAlone.slots[15].status == "blocked" and #leaveAlone.steps == 0)
   local duplicate = P.plan(snap, {[15] = P.capture(first), [16] = P.capture(first)})
   assert(duplicate.blocked and duplicate.slots[16].status == "ambiguous")
+
+  local moved = P.resolve({row(16, first), row(24, second, 2)}, P.capture(second))
+  assert(moved.slot == 24 and moved.sub == 2, "inspection must follow the saved copy's current location")
+  local unresolved, why = P.resolve({row(16, first)}, P.capture(second))
+  assert(unresolved == nil and why == "missing", "inspection must not select a different copy")
 end
 
 do

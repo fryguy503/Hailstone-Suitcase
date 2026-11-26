@@ -1,11 +1,12 @@
 local functions, binds, files = {}, {}, {}
 local player = {name = "Adventurer", in_zone = true, zone_id = 2, spawn_id = 50}
 local server = {host = "localhost", world = "Preview", port = 5999}
-local lastChat
+local lastChat, inspection
 local hs = {
   player = function() return player end,
   server = function() return server end,
   chat = function(message) lastChat = message end,
+  inspect_item = function(id, augments) inspection = {id = id, augments = augments} end,
   ui_function = function(name, fn) functions[name] = fn end,
   menu = function(label, command) assert(label == "Suitcase" and command == "/suitcase") end,
 }
@@ -30,6 +31,12 @@ assert(functions.save_profile(key, {sets = {{name = "Tank"}}}))
 assert(functions.profile_state().data.sets[1].name == "Tank")
 assert(functions.profile_state(key).data == nil)
 
+assert(functions.inspect_saved(100, "12:0:34:0:0:0"))
+assert(inspection.id == 100 and #inspection.augments == 6 and inspection.augments[3] == 34)
+assert(functions.inspect_saved(101, "bad profile data"))
+assert(inspection.id == 101 and #inspection.augments == 0)
+assert(not functions.inspect_saved(0xffffffff + 1))
+
 binds["/suitcase"]()
 binds["/equipset"]("Resist", "Gear")
 binds["/suit"]("@1")
@@ -53,6 +60,7 @@ files[path] = "broken"
 assert(functions.profile_state().invalid)
 player.in_zone = false
 assert(not functions.profile_state())
+assert(not functions.inspect_saved(100))
 binds["/suitcase"]()
 assert(lastChat:find("Enter the world", 1, true))
 print("Suitcase character profiles and all three slash aliases passed.")
