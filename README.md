@@ -15,13 +15,15 @@ In Hailstone 0.7.3-beta or newer, open **Add-ons** from the login screen and add
 
 Left-click a slot to select it. Right-click saved gear in either layout to see its stats in Hailstone’s regular item window. Worn and carried items show the exact item, including its installed augments. When a saved copy is unavailable, Suitcase requests the saved item’s stats through the server’s normal item-link system.
 
-Under **Edit Set**, **Use Worn** saves the item you’re currently wearing in that slot, **Set Empty** asks Suitcase to remove the item when equipping the set, and **Ignore Slot** leaves whatever you’re wearing alone. Use **Rename** or **Delete** to manage sets.
+Under **Edit Set**, **Use Worn** saves the item you’re currently wearing in that slot, **Set Empty** asks Suitcase to remove the item when equipping the set, and **Ignore Slot** leaves whatever you’re wearing alone. If a saved piece shows **Check copy**, select its slot and use **Choose Copy** to bind the set to a specific worn or bagged copy. Right-click a choice to inspect it first. Use **Rename** or **Delete** to manage sets.
 
 Click **Make Hotkey** to put a regular Hailstone social on your cursor, then place it in any normal hotbar slot. A set’s hotkey follows it when renamed. Deleting the set makes its old hotkey report that the set is unavailable.
 
 ## Swapping gear
 
-Suitcase checks that the required pieces are equipped or carried, that it can resolve the right copy, and that displaced gear has room. It reuses the incoming item’s old bag slot where possible. Bring banked gear into your carried inventory before equipping the set. On older builds with less information about bags, free general inventory space can help when Suitcase can’t prove a bag will accept an outgoing item. Servers that use temporary item serials need a unique match after a relog. Newer Hailstone builds can include augment sockets in the match.
+Suitcase checks that the required pieces are equipped or carried, that it can resolve the right copy, and that displaced gear has room. It reuses the incoming item’s old bag slot where possible. Bring banked gear into your carried inventory before equipping the set. On older builds with less information about bags, free general inventory space can help when Suitcase can’t prove a bag will accept an outgoing item.
+
+Corpse looting can give gear new instance IDs. Suitcase can recover a unique copy when the item ID, all six augment slots, and attunement match the saved item. It keeps the original ID and remembers the verified replacement for future swaps. Use **Choose Copy** when more than one copy matches or the saved information is incomplete.
 
 The game processes inventory moves individually. Keep your cursor clear and finish casting, trading, looting, or other inventory jobs before starting. Suitcase stops if state changes unexpectedly and reports partial progress. Use the regular inventory to finish placing anything that remains on your cursor.
 

@@ -70,41 +70,129 @@ local function record(snapshot)
   return source
 end
 
-function P.resolve(rows, target, wornSlot)
-  local exact, same, previouslyWorn = {}, {}, {}
-  local savedSerial = serial(target)
-  local persistentSerial = savedSerial and savedSerial:match("%D")
-  local incompatibleExact, equivalentWorn = false, nil
+local function persistent(serialNumber)
+  return type(serialNumber) == "string" and serialNumber:match("%D") ~= nil
+end
+
+local function fingerprint(item)
+  local value = item.configuration
+  if type(value) == "string" and value:match("^%d+:%d+:%d+:%d+:%d+:%d+$") then return value end
+end
+
+local function variantMatches(target, item, config)
+  local actual = fingerprint(item)
+  local attuned = type(target.attuned) == "boolean" and type(item.attuned) == "boolean"
+  if (config and actual and config ~= actual) or (attuned and target.attuned ~= item.attuned) then return false end
+  if config and actual and attuned then return true end
+  return nil
+end
+
+local function candidates(rows, target, wornSlot)
+  local found = {exact = {}, verified = {}, recovery = {}, unknown = {}, legacy = {}}
+  local savedSerial, config = serial(target), fingerprint(target)
+  local verified = target.recovered_serial or target.worn_serial
+  local stable = persistent(savedSerial)
   for _, row in ipairs(rows) do
     local item = row.item
-    if item.id == target.id then
+    if item and item.id == target.id and not row.stale and (row.where == "worn" or row.where == "carried") then
+      found.present = true
       local currentSerial = serial(item)
-      local configurationMatches = target.configuration == nil or target.configuration == item.configuration
+      local variant = variantMatches(target, item, config)
       if savedSerial and savedSerial == currentSerial then
-        if persistentSerial or configurationMatches then exact[#exact + 1] = row
-        else incompatibleExact = true end
+        if stable or (target.configuration == nil and variant ~= false) or variant == true then
+          found.exact[#found.exact + 1] = row
+        else
+          found.conflictingExact = true
+        end
       end
-      if configurationMatches and (target.attuned == nil or target.attuned == item.attuned) then
-        same[#same + 1] = row
+      if variant then
+        if persistent(verified) and currentSerial == verified then found.verified[#found.verified + 1] = row end
+        if row.where == "worn" and row.slot == wornSlot then found.worn = row end
+        found.recovery[#found.recovery + 1] = row
+      elseif variant == nil then
+        found.unknown[#found.unknown + 1] = row
       end
-      if target.configuration and target.configuration ~= "" and configurationMatches
-          and target.attuned ~= nil and target.attuned == item.attuned and not row.stale then
-        if currentSerial and currentSerial == target.worn_serial then previouslyWorn[#previouslyWorn + 1] = row end
-        if row.where == "worn" and row.slot == wornSlot then equivalentWorn = row end
+      -- Keep the existing stock-server fallback for pre-fingerprint saves with temporary serials.
+      if not stable and target.configuration == nil and (target.attuned == nil or target.attuned == item.attuned) then
+        found.legacy[#found.legacy + 1] = row
       end
     end
   end
-  -- Bastion's alphanumeric serial identifies the same item after augment changes. Decimal RoF2 serials may churn or
-  -- be reassigned between sessions, so require the saved configuration when available and refuse a conflicting match.
-  local candidates = (#exact > 0 or persistentSerial or incompatibleExact) and exact or same
-  if #candidates == 1 then return candidates[1] end
-  if #candidates > 1 then return nil, "ambiguous" end
-  if incompatibleExact then return nil, "missing" end
-  if #previouslyWorn == 1 then return previouslyWorn[1] end
-  if #previouslyWorn > 1 then return nil, "ambiguous" end
-  -- An equivalent item already in the intended worn slot can stay there when the saved UID no longer resolves.
-  if equivalentWorn then return equivalentWorn, "equivalent_worn" end
-  return nil, "missing"
+  return found
+end
+
+local function only(rows, reserved)
+  local first, count = nil, 0
+  for _, row in ipairs(rows) do
+    if not reserved[row.item] then first, count = row, count + 1 end
+  end
+  return first, count
+end
+
+local function resolvePhase(found, phase, reserved)
+  if phase == 1 then
+    if #found.exact > 1 then return nil, "ambiguous" end
+    if #found.exact == 1 then return found.exact[1], "exact" end
+    if found.conflictingExact then return nil, "unverified" end
+  elseif phase == 2 then
+    if #found.verified > 1 then return nil, "ambiguous" end
+    if #found.verified == 1 then return found.verified[1], "verified" end
+  elseif phase == 3 then
+    if found.worn and not reserved[found.worn.item] then return found.worn, "equivalent_worn" end
+  else
+    local choice, count = only(found.recovery, reserved)
+    local _, unknown = only(found.unknown, reserved)
+    if count > 1 or (count == 1 and unknown > 0) then return nil, "ambiguous" end
+    if count == 1 then return choice, "recovered" end
+    local legacy, legacyCount = only(found.legacy, reserved)
+    if legacyCount > 1 or (legacyCount == 1 and unknown > 1) then return nil, "ambiguous" end
+    if legacyCount == 1 then return legacy, "legacy" end
+    return nil, found.present and "unverified" or "missing"
+  end
+end
+
+function P.resolve(rows, target, wornSlot)
+  local found, reserved = candidates(rows, target, wornSlot), {}
+  for phase = 1, 4 do
+    local row, match = resolvePhase(found, phase, reserved)
+    if match then return row, match end
+  end
+end
+
+local function resolveSet(rows, targets)
+  local found, resolved, reserved = {}, {}, {}
+  for slot = FIRST_WORN, LAST_WORN do
+    local target = targets[slot]
+    if type(target) == "table" then
+      found[slot] = candidates(rows, target, slot)
+    end
+  end
+  -- Reserve originals, verified replacements, and no-move worn matches before considering displaced identities.
+  -- Do not reserve heuristic recovery matches against one another. The final assignment checks for reuse.
+  for phase = 1, 4 do
+    for slot = FIRST_WORN, LAST_WORN do
+      if found[slot] and not resolved[slot] then
+        local row, match = resolvePhase(found[slot], phase, reserved)
+        if match then
+          resolved[slot] = {row = row, match = match}
+          if row and phase < 4 then reserved[row.item] = true end
+        end
+      end
+    end
+  end
+  return resolved
+end
+
+local function remember(targets, updated, slot, verifiedSerial, field)
+  if not persistent(verifiedSerial) then return updated end
+  if not updated then
+    updated = {}
+    for key, value in pairs(targets) do updated[key] = value end
+  end
+  local saved = P.capture(targets[slot])
+  saved[field] = verifiedSerial
+  updated[slot] = saved
+  return updated
 end
 
 function P.rememberWorn(rows, targets, outgoing)
@@ -113,17 +201,18 @@ function P.rememberWorn(rows, targets, outgoing)
     local target = targets[slot]
     if type(target) == "table" then
       local row, match = P.resolve(rows, target, slot)
-      local currentSerial = row and serial(row.item)
-      if match == "equivalent_worn" and currentSerial and currentSerial:match("%D") then
-        if not updated then
-          updated = {}
-          for key, value in pairs(targets) do updated[key] = value end
-        end
-        local saved = P.capture(target)
-        -- Keep the original UID first in case it becomes available. Only remember a verified copy we are wearing.
-        saved.worn_serial = currentSerial
-        updated[slot] = saved
-      end
+      if match == "equivalent_worn" then updated = remember(targets, updated, slot, serial(row.item), "worn_serial") end
+    end
+  end
+  return updated
+end
+
+function P.rememberResolved(targets, plan)
+  if not plan or plan.blocked then return nil end
+  local updated
+  for slot, detail in pairs(plan.slots) do
+    if detail.match == "recovered" then
+      updated = remember(targets, updated, slot, serial(detail.item), "recovered_serial")
     end
   end
   return updated
@@ -301,6 +390,7 @@ end
 function P.plan(snapshot, targets)
   snapshot, targets = snapshot or {}, targets or {}
   local source = record(snapshot)
+  local resolved = resolveSet(source.rows, targets)
   local result = {steps = {}, slots = {}, changes = 0, blocked = false}
   local destination, targetFor = {}, {}
   local function reject(slot, status, message)
@@ -322,17 +412,21 @@ function P.plan(snapshot, targets)
       detail.status = current and "available" or "empty"
       if current then result.changes = result.changes + 1 end
     elseif type(target) == "table" then
-      local row, unresolved = P.resolve(source.rows, target, slot)
+      local match = resolved[slot]
+      local row = match.row
       if not row then
         result.changes = result.changes + 1
-        local reason = unresolved == "ambiguous" and " has more than one matching copy." or " is missing from worn gear and bags."
-        reject(slot, unresolved, itemName(target) .. reason)
+        local reason = match.match == "ambiguous" and " has more than one possible matching copy. Use Choose Copy in Edit Set."
+          or match.match == "unverified" and " is present, but the saved version could not be verified. Use Choose Copy in Edit Set."
+          or " is missing from worn gear and bags."
+        reject(slot, match.match, itemName(target) .. reason)
       else
         detail.source, detail.item = row, row.item
+        detail.match = match.match
         detail.status = row.item == current and "equipped" or "available"
         if row.item ~= current then result.changes = result.changes + 1 end
         if targetFor[row.item] ~= nil then
-          reject(slot, "ambiguous", itemName(target) .. " is assigned to two equipment slots.")
+          reject(slot, "ambiguous", itemName(target) .. " is assigned to two equipment slots. Use Choose Copy in Edit Set.")
         else
           destination[slot], targetFor[row.item] = row.item, slot
           if row.where == "worn" and row.slot ~= slot and targets[row.slot] == nil then

@@ -65,7 +65,7 @@ do
   local moved = P.resolve({row(16, first), row(24, second, 2)}, P.capture(second))
   assert(moved.slot == 24 and moved.sub == 2, "inspection must follow the saved copy's current location")
   local unresolved, why = P.resolve({row(16, first)}, P.capture(second))
-  assert(unresolved == nil and why == "missing", "inspection must not select a different copy")
+  assert(unresolved == nil and why == "unverified", "inspection must not select an unverified copy")
 end
 
 do
@@ -75,7 +75,8 @@ do
   local snap = snapshot({row(23, wrong), row(24, helm), bank})
   local missing = P.plan(snap, {[16] = P.capture(saved), [2] = P.capture(helm)})
   assert(missing.blocked and missing.changes == 2 and #missing.steps == 0)
-  assert(missing.slots[16].status == "missing" and missing.slots[2].status == "available")
+  assert(missing.slots[16].status == "unverified" and missing.slots[2].status == "available")
+  assert(P.plan(snapshot({bank}), {[16] = P.capture(saved)}).slots[16].status == "missing")
 
   local numeric = item(4, "0000000000000154", {16})
   local replaced = item(4, "0000000000000188", {16})
@@ -108,11 +109,11 @@ do
   local fallback = P.plan(snapshot({row(23, good), row(24, other)}), wanted)
   assert(not fallback.blocked and fallback.slots[16].item == good)
   local missing = P.plan(snapshot({row(23, other)}), wanted)
-  assert(missing.blocked and missing.slots[16].status == "missing")
+  assert(missing.blocked and missing.slots[16].status == "unverified")
   local ambiguous = P.plan(snapshot({row(23, good), row(24, same)}), wanted)
   assert(ambiguous.blocked and ambiguous.slots[16].status == "ambiguous")
   local conflicting = P.plan(snapshot({row(23, good), row(24, reused)}), wanted)
-  assert(conflicting.blocked and conflicting.slots[16].status == "missing")
+  assert(conflicting.blocked and conflicting.slots[16].status == "unverified")
 end
 
 do
@@ -125,10 +126,12 @@ do
   assert(not plan.blocked and plan.changes == 0 and #plan.steps == 0)
   assert(plan.slots[2].status == "equipped" and plan.slots[2].source == current)
   assert(P.resolve({current}, target, 2) == current)
-  assert(not P.resolve({current}, target, 3), "a similar item in a different worn slot cannot substitute")
+  local elsewhere, elsewhereMatch = P.resolve({current}, target, 3)
+  assert(elsewhere == current and elsewhereMatch == "recovered", "only the intended worn slot counts as a no-op")
 
   local carried = row(23, equipped)
-  assert(not P.resolve({carried}, target, 2), "a similar carried item cannot substitute for the saved instance")
+  local recovery, recoveryMatch = P.resolve({carried}, target, 2)
+  assert(recovery == carried and recoveryMatch == "recovered")
   local exact = row(23, saved)
   assert(P.resolve({current, exact}, target, 2) == exact, "an available exact copy takes precedence")
   assert(not P.rememberWorn({current, exact}, {[2] = target}, {[2] = true}))
@@ -179,9 +182,15 @@ do
   assert(active["i:6"] == clickShoulders and active["i:15"] == clickRing)
   local clickSnap = snapshot({row(2, helm), row(6, clickShoulders), row(15, clickRing), row(17, chest),
     row(23, bag), row(23, active["i:23:0"], 0), row(23, active["i:23:1"], 1)})
-  assert(P.plan(clickSnap, baseline).blocked, "an unverified carried copy must not substitute")
+  local recovery = P.plan(clickSnap, baseline)
+  assert(not recovery.blocked and recovery.slots[6].match == "recovered" and recovery.slots[15].match == "recovered")
+  local recorded = P.rememberResolved(baseline, recovery)
+  assert(recorded[6].serial == savedShoulders.serial and recorded[6].recovered_serial == shoulders.serial)
+  assert(recorded[15].serial == savedRing.serial and recorded[15].recovered_serial == ring.serial)
+  assert(not baseline[6].recovered_serial and recorded[2] == baseline[2])
   local toBaseline = P.plan(clickSnap, remembered)
   assert(not toBaseline.blocked and toBaseline.changes == 2 and #toBaseline.steps == 6)
+  assert(toBaseline.slots[6].match == "verified" and toBaseline.slots[15].match == "verified")
   local restored, finalCursor = apply(toBaseline, clickSnap)
   assert(restored["i:2"] == helm and restored["i:17"] == chest and not finalCursor)
   assert(restored["i:6"] == shoulders and restored["i:15"] == ring)
@@ -189,6 +198,56 @@ do
   assert(P.resolve({baggedRing, originalRing}, remembered[15], 15) == originalRing)
   local changedRing = item(24, ring.serial, {15}, {configuration = "80:0:0:0:0:0"})
   assert(not P.resolve({row(23, changedRing)}, remembered[15], 15))
+end
+
+do
+  local sig = "0:0:45:0:0:92"
+  local saved = item(27, "FirstLife", {15, 16}, {configuration = sig, attuned = true})
+  local recovered = item(27, "SecondLife", {15, 16}, {configuration = sig, attuned = true})
+  local newer = item(27, "ThirdLife", {15, 16}, {configuration = sig, attuned = true})
+  local wrongAug = item(27, "WrongAugment", {15, 16}, {configuration = "0:0:92:0:0:45", attuned = true})
+  local wrongAttuned = item(27, "WrongAttunement", {15, 16}, {configuration = sig, attuned = false})
+  local unknown = item(27, "UnknownAugments", {15, 16}, {attuned = true})
+  local malformed = item(27, "MalformedAugments", {15, 16}, {configuration = "0:0:45:0:0", attuned = true})
+  local target = {[15] = P.capture(saved)}
+  local one = P.plan(snapshot({row(23, recovered), row(24, wrongAug), row(25, wrongAttuned)}), target)
+  assert(not one.blocked and one.slots[15].match == "recovered")
+  local remembered = P.rememberResolved(target, one)
+  local two = P.plan(snapshot({row(23, newer)}), remembered)
+  assert(not two.blocked and two.slots[15].match == "recovered")
+  local renewed = P.rememberResolved(remembered, two)
+  assert(renewed[15].serial == saved.serial and renewed[15].recovered_serial == newer.serial)
+
+  local recognized = P.plan(snapshot({row(23, newer), row(24, recovered), row(25, unknown)}), renewed)
+  assert(not recognized.blocked and recognized.slots[15].match == "verified" and recognized.slots[15].item == newer)
+  local stronger = P.plan(snapshot({row(23, newer), row(24, saved)}), renewed)
+  assert(not stronger.blocked and stronger.slots[15].match == "exact" and stronger.slots[15].item == saved)
+
+  for _, other in ipairs({wrongAug, wrongAttuned, unknown, malformed}) do
+    local rejected = P.plan(snapshot({row(23, other)}), target)
+    assert(rejected.blocked and rejected.slots[15].status == "unverified" and #rejected.steps == 0)
+  end
+  for _, other in ipairs({newer, unknown, malformed}) do
+    local ambiguous = P.plan(snapshot({row(23, recovered), row(24, other)}), target)
+    assert(ambiguous.blocked and ambiguous.slots[15].status == "ambiguous" and #ambiguous.steps == 0)
+    assert(not P.rememberResolved(target, ambiguous))
+  end
+  local stale = row(23, recovered)
+  stale.stale = true
+  assert(P.plan(snapshot({stale}), target).slots[15].status == "missing")
+  local legacy = P.capture(item(27, saved.serial, {15, 16}, {attuned = true}))
+  assert(P.plan(snapshot({row(23, recovered)}), {[15] = legacy}).slots[15].status == "unverified")
+  assert(not P.plan(snapshot({row(23, saved)}), {[15] = legacy}).blocked)
+
+  local exactOther = item(27, "RightOriginal", {15, 16}, {configuration = sig, attuned = true})
+  local both = {[15] = target[15], [16] = P.capture(exactOther)}
+  local snap = snapshot({row(23, exactOther), row(24, recovered)})
+  local reserved = P.plan(snap, both)
+  assert(not reserved.blocked and reserved.slots[15].item == recovered and reserved.slots[16].item == exactOther)
+  local after = apply(reserved, snap)
+  assert(after["i:15"] == recovered and after["i:16"] == exactOther)
+  local contested = P.plan(snapshot({row(23, recovered)}), both)
+  assert(contested.blocked and contested.slots[16].status == "ambiguous" and #contested.steps == 0)
 end
 
 do
@@ -266,4 +325,4 @@ do
   assert(after["i:23"] == oldChest and after["i:24:1"] == oldHat)
 end
 
-print("Suitcase planner passed identity, clear slots, bag fit, hand order, cursor cycles, full stacks, and retry")
+print("Suitcase planner passed identity, corpse recovery, bag fit, hand order, cursor cycles, full stacks, and retry")

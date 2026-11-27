@@ -63,13 +63,14 @@ local function selectSet(set)
   notice(nil)
 end
 
-local function recordOutgoingGear(current, plan)
+local function recordGearIdentities(current, plan, selectedId)
   local outgoing, nextProfile = {}, nil
   for _, step in ipairs(plan.steps) do
     if NAMES[step.slot] and step.before then outgoing[step.slot] = true end
   end
   for index, saved in ipairs(profile.sets) do
     local targets = Plan.rememberWorn(current.rows, saved.targets, outgoing)
+    if saved.id == selectedId then targets = Plan.rememberResolved(targets or saved.targets, plan) or targets end
     if targets then
       nextProfile = nextProfile or Sets.copy(profile)
       nextProfile.sets[index] = {id = saved.id, name = saved.name, targets = targets}
@@ -94,8 +95,8 @@ local function equip(set, byCommand)
     local ok
     ok, why = runtime.start(plan, set.name)
     if ok then
-      if not recordOutgoingGear(current, plan) then
-        runtime.cancel("Could not save the identities of the gear being removed.")
+      if not recordGearIdentities(current, plan, set.id) then
+        runtime.cancel("Could not save the verified item identities.")
         return
       end
       notice("Equipping " .. set.name .. "…")
@@ -136,7 +137,7 @@ local function runForm()
     changed.name = clean
     nextProfile.sets[index] = changed
   else
-    snapshot = runtime.snapshot()
+    snapshot = runtime.snapshot(true)
     if not snapshot then return notice("Inventory is unavailable.", true) end
     local id = nextProfile.next_id
     nextProfile.sets[#nextProfile.sets + 1] = {id = id, name = clean, targets = capture()}
@@ -195,7 +196,7 @@ local function blank(x, y, w, h)
 end
 
 local function problem(row)
-  return row and (row.status == "missing" or row.status == "ambiguous" or row.status == "blocked")
+  return row and (row.status == "missing" or row.status == "ambiguous" or row.status == "unverified" or row.status == "blocked")
 end
 
 local function gearIcon(x, y, size, row, s)
@@ -223,6 +224,7 @@ local function location(row)
   if row.status == "equipped" then return "Equipped" end
   if row.status == "missing" then return "Missing from bags" end
   if row.status == "ambiguous" then return "More than one matching item" end
+  if row.status == "unverified" then return "Item copy needs checking" end
   if row.status == "blocked" then return row.problem or "Blocked" end
   if row.target == false then return "Stow worn item" end
   local source = row.source
@@ -232,19 +234,27 @@ local function location(row)
     or "Inventory slot " .. (source.slot - 22)
 end
 
+local function takeInspectionClick()
+  if ui.GetIO().alt then T.TakeAltRightClick() else T.TakeRightClick() end
+end
+
+local function inspectSource(source)
+  return pcall(API.inventory.ClickSlot, source.slot, source.sub, "rightheld")
+end
+
 local function itemHelp(row, label)
   if not ui.IsItemHovered() then return end
   local target = row and row.target
   if type(target) == "table" then
     if ui.IsItemClicked(ui.Mouse.Right) then
-      if ui.GetIO().alt then T.TakeAltRightClick() else T.TakeRightClick() end
+      takeInspectionClick()
       -- Re-resolve against the current inventory so a moved item never inspects the contents of its old slot.
       local current = runtime.snapshot(true)
       if not current then return notice("Inventory is unavailable.", true) end
       local source = Plan.resolve(current.rows, target, row.slot)
       local ok, openedItem
       if source then
-        ok, openedItem = pcall(API.inventory.ClickSlot, source.slot, source.sub, "rightheld")
+        ok, openedItem = inspectSource(source)
       else
         ok, openedItem = pcall(owner.inspect_saved, target.id, target.configuration)
       end
@@ -268,7 +278,9 @@ local function tile(slot, row, x, y, width, height, weapon, font, s)
     local tx, tw = x + size + 9 * s, width - size - 14 * s
     text(tx, y + (red and 2 or 9) * s, NAMES[slot], tw, C.text, font)
     if red then
-      text(tx, y + 15 * s, row.status == "missing" and "Missing" or "Blocked", tw, C.danger, T.font.tiny)
+      local label = row.status == "missing" and "Missing" or
+        ((row.status == "ambiguous" or row.status == "unverified") and "Check copy" or "Blocked")
+      text(tx, y + 15 * s, label, tw, C.danger, T.font.tiny)
     end
   end
   if T.Hit("##suitcase-slot" .. slot, x, y, x + width, y + height) then inspected = slot end
@@ -384,6 +396,36 @@ local function drawForm(selected, running, s)
   if ui.Button("Cancel##suitcase-form") then form = nil; notice(nil) end
 end
 
+local function chooseCopy(target, s)
+  ui.SetNextItemWidth(126 * s)
+  if not ui.BeginCombo("##suitcase-copy", "Choose Copy") then return end
+  local found = false
+  for _, entry in ipairs(snapshot and snapshot.rows or {}) do
+    if entry.item.id == target.id then
+      found = true
+      local choose = ui.Selectable(location({source = entry}) .. "##" .. entry.place)
+      local inspect = ui.IsItemClicked(ui.Mouse.Right)
+      if inspect then takeInspectionClick() end
+      if choose or inspect then
+        local current = runtime.snapshot(true)
+        local live = current and current.places[entry.place]
+        if not live or not Plan.sameItem(entry.item, live.item, true) then
+          notice("That item moved. Choose its current location.", true)
+        elseif choose then
+          changeSlot(inspected, Plan.capture(live.item))
+        else
+          local ok, inspectedItem = inspectSource(live)
+          if not ok or not inspectedItem then notice("Hailstone could not inspect this item.", true) end
+        end
+      elseif ui.IsItemHovered() then
+        ui.SetTooltip((entry.item.name or "Item") .. "\nRight-click to inspect this copy")
+      end
+    end
+  end
+  if not found then ui.TextDisabled("No copies worn or in your bags") end
+  ui.EndCombo()
+end
+
 local function drawDetails(selected, height, status, s)
   local plan = selected and preview(selected)
   local width = ui.GetContentRegionAvail()
@@ -405,7 +447,7 @@ local function drawDetails(selected, height, status, s)
     ui.TextWrapped("Save Equipped to make a set from the gear you’re wearing.")
     return
   end
-  local body = math.max(130 * s, height - (editing and 137 or 109) * s)
+  local body = math.max(130 * s, height - (editing and 163 or 109) * s)
   ui.BeginChild("##suitcase-preview", width, body, false)
   local content = ui.GetContentRegionAvail()
   if profile.layout == "list" then listView(plan, content, s) else inventory(plan, content, s) end
@@ -455,7 +497,11 @@ local function drawDetails(selected, height, status, s)
     ui.SameLine()
     if ui.Button("Ignore Slot") then changeSlot(inspected, nil) end
     ui.EndDisabled()
-    ui.SameLine()
+    local target = selected.targets[inspected]
+    if snapshot and type(target) == "table" then
+      chooseCopy(target, s)
+      ui.SameLine()
+    end
     if ui.Button("Rename") then form, name = "rename", selected.name end
     ui.SameLine()
     if ui.Button("Delete") then form = "delete" end

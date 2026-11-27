@@ -38,21 +38,34 @@ hs.ui_function("inspect_saved", function(id, configuration)
   return true
 end)
 
+local function item_configuration(at)
+  local item = mq.TLO.Me.Inventory(at.slot)
+  if at.sub >= 0 then item = item.Item(at.sub + 1) end
+  -- Earlier Hailstone builds lack Augs/AugSlot. Only record a fingerprint if every socket is known.
+  local id = item.ID()
+  if type(id) ~= "number" or id <= 0 or type(item.Augs()) ~= "number" then return nil end
+  local ids = {}
+  for number = 1, 6 do
+    local socket = item.AugSlot(number)
+    local empty = socket.Empty()
+    if empty == true then
+      ids[number] = 0
+    elseif empty == false then
+      local id = socket.Item.ID()
+      if type(id) ~= "number" or id <= 0 then return nil end
+      ids[number] = id
+    else
+      return nil
+    end
+  end
+  return table.concat(ids, ":")
+end
+
 hs.ui_function("item_configurations", function(places)
   local configurations = {}
   for index, at in ipairs(places) do
-    local item = mq.TLO.Me.Inventory(at.slot)
-    if at.sub >= 0 then item = item.Item(at.sub + 1) end
-    -- Earlier Hailstone builds lack Augs/AugSlot. Let the planner use the server's serial there.
-    local ok, available = pcall(function() return item.Augs() end)
-    if not ok or available == nil then
-      if index == 1 then return {} end
-      configurations[index] = ""
-    else
-      local ids = {}
-      for socket = 1, 6 do ids[socket] = item.AugSlot(socket).Item.ID() or 0 end
-      configurations[index] = table.concat(ids, ":")
-    end
+    local ok, configuration = pcall(item_configuration, at)
+    configurations[index] = ok and configuration or ""
   end
   return configurations
 end)

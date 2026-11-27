@@ -10,10 +10,12 @@ local hs = {
   ui_function = function(name, fn) functions[name] = fn end,
   menu = function(label, command) assert(label == "Suitcase" and command == "/suitcase") end,
 }
+local inventory = {}
 local mq = {
   configDir = "config",
   bind = function(command, fn) binds[command] = fn end,
   pickle = function(path, data) files[path] = data end,
+  TLO = {Me = {Inventory = function(slot) return inventory[slot] end}},
 }
 local env = setmetatable({
   require = function(name) return name == "mq" and mq or hs end,
@@ -36,6 +38,35 @@ assert(inspection.id == 100 and #inspection.augments == 6 and inspection.augment
 assert(functions.inspect_saved(101, "bad profile data"))
 assert(inspection.id == 101 and #inspection.augments == 0)
 assert(not functions.inspect_saved(0xffffffff + 1))
+
+local function item(augments)
+  return {
+    ID = function() return 100 end,
+    Augs = function() return 6 end,
+    AugSlot = function(slot)
+      local id = augments[slot]
+      return {
+        Empty = function() return id == nil end,
+        Item = {ID = function()
+          if id == false then error("unreadable augment") end
+          return id
+        end},
+      }
+    end,
+  }
+end
+
+inventory[1] = {ID = function() return 101 end} -- Preview 02 has no Augs on the item TLO.
+inventory[2], inventory[3], inventory[4] = item({[2] = 12}), item({[1] = false}), item({})
+inventory[23] = {Item = function(sub)
+  assert(sub == 1)
+  return item({[6] = 34})
+end}
+local configurations = functions.item_configurations({{slot = 0, sub = -1}, {slot = 1, sub = -1},
+  {slot = 2, sub = -1}, {slot = 3, sub = -1}, {slot = 4, sub = -1}, {slot = 23, sub = 0}})
+assert(#configurations == 6 and configurations[1] == "" and configurations[2] == "")
+assert(configurations[3] == "0:12:0:0:0:0" and configurations[4] == "")
+assert(configurations[5] == "0:0:0:0:0:0" and configurations[6] == "0:0:0:0:0:34")
 
 binds["/suitcase"]()
 binds["/equipset"]("Resist", "Gear")
@@ -63,4 +94,4 @@ assert(not functions.profile_state())
 assert(not functions.inspect_saved(100))
 binds["/suitcase"]()
 assert(lastChat:find("Enter the world", 1, true))
-print("Suitcase character profiles and all three slash aliases passed.")
+print("Suitcase character profiles, item fingerprints, and all three slash aliases passed.")
